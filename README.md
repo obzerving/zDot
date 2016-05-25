@@ -3,6 +3,7 @@ The zwhome custom home automation system
 Disclaimer: This page documents a home automation system I put together solely for my needs. It includes the source code and development environment for software I wrote over a period of years. During that time, this system evolved in significant ways. So, there is legacy conditional code that might not work anymore. For example, at one time or another, this system ran under Microsoft Windows, had a touchscreen display, and was accessible via a web page. Even though the software satisfies my needs and performs stably, I still consider it unfinished. The system still needs to discover the characteristics of the z-wave devices rather than having them manually entered into zwhome's configuration file. It also needs to handle dimmers instead of just switches.
 
 This system is built around three major software components, which need to be compiled and linked. They are:
+
 1.  zwhome: This is a custom software program that provides these functions
   - Support for Z-wave device switches and 4-in-1 multi-sensor
   - Support for custom wifi sensors
