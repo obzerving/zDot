@@ -1,0 +1,76 @@
+zwhome Software Installation
+
+- Write Raspian Jessie operating system image to SD card (See https://www.raspberrypi.org/documentation/installation/installing-images/README.md)
+- Put SD card in Raspberry Pi, power it up, and configure it with raspi-config (See http://elinux.org/RPi_raspi-config)
+- Update the system with the following commands
+  - sudo apt-get update
+  - sudo apt-get upgrade
+- Install slam-clock per its README.md
+- Install libraries
+  - sudo apt-get install libudev-dev
+  - sudo apt-get install libcurl4-openssl-dev
+  - sudo apt-get install libhdate-dev
+  - sudo apt-get install libtelnet-dev
+- Build open-zwave library
+  - Download a release of open-zwave (latest is version 1.4 as of this writing) from https://github.com/OpenZWave/open-zwave/releases
+  - Decompress it into a directory
+    - tar xvzf https://github.com/OpenZWave/open-zwave/archive/v1.4.tar.gz
+  - Compile it
+    - cd open-zwave-1.4
+	- make
+- Install Code::Blocks IDE
+  - sudo apt-get install codeblocks
+- Import zwhome source code, located at https://github.com/obzerving/zwhome, into codeblocks
+- Add path to open-zwave library (e.g. /home/pi/Documents/open-zwave-1.4/cpp/build) into codeblocks
+- Add references to libraries (libudev-dev, libcurl4-openssl-dev, libhdate-dev, and libopenzwave.so) into codeblocks
+- Edit zwDevices.cpp for path to open-zwave-1.4/config
+- Compile and build zwhome
+- Make a directory to put zwhome executable
+  - mkdir /home/pi/zwhome
+- Copy executable from /home/pi/Documents/Codeblocks/zwhome/bin/Debug to /home/pi/zwhome
+  - cd /home/pi/zwhome
+  - cp /home/pi/Documents/Codeblocks/zwhome/bin/Debug/zwhome .
+- Download sample zwhome configuration file, located at ?/zwconfig.txt, into /home/pi/zwhome and modify it accordingly (Note: zwhome must be restarted everytime the configuration file is changed).
+- Download sample zwhome rules file, located at ?/rulesfile.txt, into /home/pi/zwhome and modify accordingly (Note: zwhome must be restarted everytime the rules file is changed).
+- Use z-wave controller to add z-wave devices to z-wave network (see http://aeotec.com/z-wave-usb-stick/913-z-stick-manual-instructions.html)
+- Run MinOZW program to get parameters of z-wave devices
+  - /home/pi/Documents/open-zwave-1.4/MinOZW
+- Define z-wave home-ID and devices in zwhome configuration file
+- Run zwhome (This will execute the rules file automatically) and add it to /etc/rc.local to have it start after a reboot
+  /home/pi/zwhome/zwhome /home/pi/zwhome/zwconfig.txt &
+- Try the RESTful service! (for example, your pi's IP address is 192.168.1.2 and you have a light in the kitchen connected to a z-wave switch)
+  - http://192.168.1.2:8000/devices/switches/kitchen-light?state=on
+  - http://192.168.1.2:8000/devices/switches/kitchen-light?state=off
+
+Amazon Echo Bridge Software Installation
+- Download a release of the software (latest version is 0.2.1 as of this writing) from https://github.com/armzilla/amazon-echo-ha-bridge/releases
+- Put it into a directory (for example)
+  - mkdir armzilla
+  - cp amazon-echo-bridge-0.2.1.jar armzilla
+- Run it (for example, your pi's IP address is 192.168.1.2 and you want the bridge to listen on port 8080) and add it to /etc/rc.local
+  - java -jar -Djava.net.preferIPv4Stack=true /home/pi/armzilla/amazon-echo-bridge-0.2.1.jar --upnp.config.address=192.168.1.2 --server.port=8080
+- Note: Wait at least five minutes for the software to complete its start up process!
+- Configure the bridge (Note: you will have problems getting to the configurator page from any computer other than the pi serving it)
+  - http://192.168.1.2:8080/configurator.html
+- Add all devices (for example)
+  - Name: Kitchen Light
+  - On URL: http://192.168.1.2:8000/devices/switches/kitchen-light?state=on
+  - Off URL: http://192.168.1.2:8000/devices/switches/kitchen-light?state=off
+- Use Amazon Echo app to discover devices (or tell the Echo to "discover devices")
+- Try it! (for example, the Echo's wake word is "Alexa," so tell it "Alexa, turn on kitchen light")
+
+zdot Software Installation
+- Download the software, located at ?/zDot
+- Compile it
+  - g++ zDot.cpp mongoose.cpp -l telnet -l pthread -o zdot
+- Add a device to the bridge using the configurator (see above;  Note that the zDot server's port is 8001; in this example, your pi's IP address is 192.168.1.2)
+  - Name: speakers
+  - On URL: http://192.168.1.2:8001/avr/audio/speakers?state=on
+  - Off URL: http://192.168.1.2:8001/avr/audio/speakers?state=off
+- Execute the following command and also add it to your .bashrc file so it executes on start up
+  - pulseaudio --start
+- Pair the Echo Dot with your pi. You might need to have the pi initiate the pairing through its desktop GUI.
+- Run it (for example, your Pioneer VSX model receiver's IP address is 192.168.1.3 and it listens on port 8102) and add it to /etc/rc.local
+  - /home/pi/zDot/zdot 192.168.1.3 8102 &
+- Try it! (for example, your Amazon Echo Dot uses the wake word "Echo," so tell it "Echo, turn on the speakers")
+  - Note: You should hear all subsequent sound from the Dot coming out of the receiver.
