@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <mutex>          // std::mutex, std::try_lock
 
 #ifdef HAVE_ZLIB
 #include "zlib.h"
@@ -40,8 +41,11 @@ static const telnet_telopt_t telopts[] = {
 };
 
 static const char *s_http_port = "8001";
-// static struct mg_serve_http_opts s_http_server_opts;
 char speakercat[20] = {"/avr/audio"};
+std::mutex strlock;
+char telresp[255];
+int volstate = -1; // Set to -1 to force us to get the real current value
+int pwrstate = -1;
 
 static void _send(int sock, const char *buffer, size_t size) {
 	int rs;
@@ -69,8 +73,11 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 	switch (ev->type) {
 	/* data received */
 	case TELNET_EV_DATA:
-		printf("%.*s", (int)ev->data.size, ev->data.buffer);
+		// printf("Received: %.*s", (int)ev->data.size, ev->data.buffer);
 		fflush(stdout);
+		strlock.lock();
+		snprintf(telresp,sizeof(telresp),"%.*s", (int)ev->data.size, ev->data.buffer);
+		strlock.unlock();
 		break;
 	/* data must be sent */
 	case TELNET_EV_SEND:
@@ -113,50 +120,129 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 	}
 }
 
-static void avrcmd(char *cmd)
+static void avrcmd(char const *cmd, char const *lvl)
 {
 	char avrbuf[8];
-	int i;
+	int laststate, volvl, i, diff;
 	memset(&avrbuf, 0, sizeof(avrbuf));
+	// It's possible that someone else changed the volume and power state, so get the current values
+	volstate = -1;
+	strcpy(avrbuf, "?V\r");
+	for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
+	while(volstate == -1); // Wait for response from the receiver
+	pwrstate = -1;
+	strcpy(avrbuf, "?P\r");
+	for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
+	while(pwrstate == -1); // Wait for response from the receiver
 	if(!strcmp(cmd, "on"))
 	{
-		strcpy(avrbuf, "PO\r");
-		for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
-		strcpy(avrbuf, "01FN\r");
-		for (i = 0; i != 5; ++i) telnet_send(telnet, avrbuf + i, 1);
-		strcpy(avrbuf, "121VL\r");
-		for (i = 0; i != 6; ++i) telnet_send(telnet, avrbuf + i, 1);
-		system("/bin/echo -e 'connect 44:65:0D:EF:0E:8F\nquit' | /usr/bin/bluetoothctl");
+		if(pwrstate != 0)
+		{
+			/*
+			If the power isn't on, then we're expected to
+			turn on power first, set the input (to CD), and make bluetooth connection with the Dot
+			If the power was already on, then we're just expected to set the volume
+			*/
+			strcpy(avrbuf, "PO\r");
+			for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
+			strcpy(avrbuf, "01FN\r");
+			for (i = 0; i != 5; ++i) telnet_send(telnet, avrbuf + i, 1);
+// TODO: take out the hardcoded device address
+		    system("/bin/echo -e 'connect 44:65:0D:EF:0E:8F\nquit' | /usr/bin/bluetoothctl");
+		}
+		if(lvl[0] != 0)
+		{ // see ev_handler for why lvl[0] could be zero
+			volvl = atoi(lvl);
+			if(volvl > 70) volvl = 70;
+			volvl = volvl*2 + 1; // ?V command returns 2x+1 value of what's shown on the receiver's display (lvl)
+			/* The right way to set the volume (to 60, for example) is this way
+			strcpy(avrbuf, "121VL\r");
+			for (i = 0; i != 6; ++i) telnet_send(telnet, avrbuf + i, 1);
+			This isn't working for the Pioneer VSX-1022 receiver (which is mine),
+			so we have to change the volume this way
+			*/
+			diff = (volstate-volvl);
+			if(diff < 0) strcpy(avrbuf, "VU\r"); // increase the volume by 2
+			else strcpy(avrbuf, "VD\r"); // decrease the volume by two
+			diff = abs(diff);
+			while (diff !=0)
+			{
+				laststate = volstate;
+				for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
+				while (laststate == volstate);
+				diff -= 2; // Every change to volstate is by 2
+			}
+		}
 	}
 	if(!strcmp(cmd, "off"))
 	{
-		strcpy(avrbuf, "091VL\r");
-		for(i = 0; i != 6; ++i) telnet_send(telnet, avrbuf + i, 1);
-		strcpy(avrbuf, "PF\r\n");
+		/*
+		We don't care if the power is already off. We're going to send the power off command
+		and lower the volume so we don't accidently deafen someone the next time the receiver
+		is turned on. Hopefully, the Dot won't care if we send a bluetooth disconnect command
+		if we're not connected.
+		*/
+		strcpy(avrbuf, "PF\r");
 		for (i = 0; i != 4; ++i) telnet_send(telnet, avrbuf + i, 1);
+		volvl = atoi(lvl)*2 + 1; // ?V command returns 2x+1 value of what's shown on the receiver's display (lvl)
+		diff = (volstate-volvl);
+		if(diff < 0) strcpy(avrbuf, "VU\r"); // increase the volume by 2
+		else strcpy(avrbuf, "VD\r"); // decrease the volume by two
+		diff = abs(diff);
+		while (diff !=0)
+		{
+			laststate = volstate;
+			for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
+			while (laststate == volstate);
+			diff -= 2; // Every change to volstate is by 2
+		}
 		system("/bin/echo -e 'disconnect 44:65:0D:EF:0E:8F\nquit' | /usr/bin/bluetoothctl");
 	}
 }
 
 static int ev_handler(struct mg_connection *conn, enum mg_event ev)
 {
+/*
+   rest URIs take the form of http://my.ip:8001/avr/audio?state=on&level=50 or
+   http://my.ip:8001/avr/audio?state=off
+*/
 	switch (ev)
 	{
 		case MG_AUTH: return MG_TRUE;
 		case MG_REQUEST:
-		printf("Request=%s, URI=%s, Query=%s\n", conn->request_method, conn->uri, conn->query_string);
+			// printf("Request=%s, URI=%s, Query=%s\n", conn->request_method, conn->uri, conn->query_string);
 			if(conn->content_len > 0)
 			{
 				std::string cbuff = std::string(conn->content, conn->content_len);
-				printf("content =%s\n", cbuff.c_str());
+				// printf("content =%s\n", cbuff.c_str());
 			}
 			if(!strncmp(conn->uri, speakercat, strlen(speakercat)))
 			{
 				char spkrstate[4];
-				mg_get_var(conn, "state", spkrstate, sizeof(spkrstate));
-				if(!strcmp(spkrstate, "on")) avrcmd("on");
-				if(!strcmp(spkrstate, "off")) avrcmd("off");
-				mg_printf_data(conn, "Turning Speakers %s\n", spkrstate);
+				char spkrlvl[4];
+				if(mg_get_var(conn, "state", spkrstate, sizeof(spkrstate)) > -1)
+				{ // normally, there will always be a "state" variable
+					if(!strcmp(spkrstate, "on"))
+					{
+						mg_printf_data(conn, "Turning Speakers On");
+						if(mg_get_var(conn, "level", spkrlvl, sizeof(spkrlvl)) > -1)
+						{
+							avrcmd("on", spkrlvl);
+							mg_printf_data(conn, "To Volume Level %s\n",spkrlvl);
+						}
+						else
+						{ // We didn't get a volume level with this command, so don't change the volume
+							spkrlvl[0] = 0;
+							avrcmd("on",spkrlvl);
+							mg_printf_data(conn, "\n");
+						}
+					}
+					if(!strcmp(spkrstate, "off"))
+					{
+						avrcmd("off", "037"); // 37 is a moderate level
+						mg_printf_data(conn, "Turning Speakers Off\n");
+					}
+				}
 				return MG_TRUE;
 			}
 			break;
@@ -167,7 +253,7 @@ static int ev_handler(struct mg_connection *conn, enum mg_event ev)
 
 static void* serve(void *server)
 {
-    printf("Starting server poll\n");
+    // printf("Starting server poll\n");
     for(;;) mg_poll_server((struct mg_server *) server, 1000);
     return NULL;
 }
@@ -183,6 +269,9 @@ int main(int argc, char* argv[])
 	struct addrinfo hints;
 
 	struct mg_server *server = mg_create_server(NULL, ev_handler);
+	
+	char avresp[255];
+	memset(&telresp, 0, sizeof(telresp));
 	
 	/* check usage */
 	if (argc != 3) {
@@ -225,7 +314,7 @@ int main(int argc, char* argv[])
 
 
 	mg_set_option(server, "document_root", ".");      // Serve current directory
-	mg_set_option(server, "listening_port", "8001");  // Open port 8000
+	mg_set_option(server, "listening_port", "8001");  // Open port 8001
 	mg_start_thread(serve, server);
 	/* initialize telnet box */
 	telnet = telnet_init(telopts, _event_handler, 0, &sock);
@@ -238,7 +327,7 @@ int main(int argc, char* argv[])
 	/* loop while connection is open */
 	while (poll(pfd, 1, -1) != -1) {
 		/* read from client */
-		if (pfd[1].revents & POLLIN) {
+		if (pfd[0].revents & POLLIN) {
 			if ((rs = recv(sock, buffer, sizeof(buffer), 0)) > 0) {
 				telnet_recv(telnet, buffer, rs);
 			} else if (rs == 0) {
@@ -247,6 +336,19 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "recv(client) failed: %s\n",
 						strerror(errno));
 				exit(1);
+			}
+		}
+		if(telresp[0] != 0) // Did the receiver send a message
+		{
+			if(strlock.try_lock())
+			{
+				strncpy(avresp,telresp,sizeof(telresp));
+				telresp[0] = 0;
+				strlock.unlock();
+				if(!strncmp(avresp, "PWR0\r\n", 6)) pwrstate = 0; // Power is on
+				// Documentation says that PWR1 is power off, but my receiver says PWR2
+				if(!strncmp(avresp, "PWR2\r\n", 6)) pwrstate = 2; // Power is off (really standby)
+				if(!strncmp(avresp, "VOL", 3)) volstate = atoi(avresp+3); // This number is 2x + 1 of what shows on display
 			}
 		}
 	}
