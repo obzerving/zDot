@@ -42,6 +42,7 @@ static const telnet_telopt_t telopts[] = {
 
 static const char *s_http_port = "8001";
 char speakercat[20] = {"/avr/audio"};
+char dot_bt_addr[20];
 std::mutex strlock;
 char telresp[255];
 int volstate = -1; // Set to -1 to force us to get the real current value
@@ -123,6 +124,7 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 static void avrcmd(char const *cmd, char const *lvl)
 {
 	char avrbuf[8];
+	char cmdbuf[80];
 	int laststate, volvl, i, diff;
 	memset(&avrbuf, 0, sizeof(avrbuf));
 	// It's possible that someone else changed the volume and power state, so get the current values
@@ -147,8 +149,8 @@ static void avrcmd(char const *cmd, char const *lvl)
 			for (i = 0; i != 3; ++i) telnet_send(telnet, avrbuf + i, 1);
 			strcpy(avrbuf, "01FN\r");
 			for (i = 0; i != 5; ++i) telnet_send(telnet, avrbuf + i, 1);
-// TODO: take out the hardcoded device address
-		    system("/bin/echo -e 'connect 44:65:0D:EF:0E:8F\nquit' | /usr/bin/bluetoothctl");
+			snprintf(cmdbuf,80, "/bin/echo -e 'connect %s\nquit' | /usr/bin/bluetoothctl", dot_bt_addr);
+		    system(cmdbuf);
 		}
 		if(lvl[0] != 0)
 		{ // see ev_handler for why lvl[0] could be zero
@@ -196,7 +198,8 @@ static void avrcmd(char const *cmd, char const *lvl)
 			while (laststate == volstate);
 			diff -= 2; // Every change to volstate is by 2
 		}
-		system("/bin/echo -e 'disconnect 44:65:0D:EF:0E:8F\nquit' | /usr/bin/bluetoothctl");
+		snprintf(cmdbuf,80, "/bin/echo -e 'disconnect %s\nquit' | /usr/bin/bluetoothctl", dot_bt_addr);
+		system(cmdbuf);
 	}
 }
 
@@ -274,11 +277,12 @@ int main(int argc, char* argv[])
 	memset(&telresp, 0, sizeof(telresp));
 	
 	/* check usage */
-	if (argc != 3) {
-		fprintf(stderr, "Usage:\n ./telnet-client <host> <port>\n");
+	if (argc != 4) {
+		fprintf(stderr, "Usage:\n ./zdot <host> <port> <echo bluetooth address>\n");
 		return 1;
 	}
 
+	strncpy(dot_bt_addr, argv[3], 20);
 	/* look up server host */
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
